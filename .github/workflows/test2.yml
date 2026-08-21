@@ -1,11 +1,11 @@
-name: Build Flutter iOS Release
+name: Build iOS IPA
 
 on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: macos-15
+  build-ios:
+    runs-on: macos-latest
 
     steps:
       - name: Checkout
@@ -15,20 +15,25 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: stable
+          cache: true
 
-      - name: Get Flutter dependencies
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Get dependencies
         run: flutter pub get
 
-      - name: Build iOS Release
+      - name: Build iOS
         run: flutter build ios --release --no-codesign
 
       - name: Create IPA
         run: |
           mkdir -p Payload
-          cp -R build/ios/iphoneos/Runner.app Payload/
-          zip -r Runner-release.ipa Payload
+          cp -R build/ios/iphoneos/Runner.app Payload/Runner.app
+          zip -r DragonTrack-unsigned.ipa Payload
+
       - name: Upload IPA
         uses: actions/upload-artifact@v4
         with:
-          name: ios-release
-          path: Runner-release.ipa
+          name: DragonTrack-unsigned-ipa
+          path: DragonTrack-unsigned.ipa
