@@ -66,5 +66,40 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+		<!-- DragonTrack Farm File Type -->
+	<key>UTExportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>com.df.dragon-fruit-flower-counter.salsfarm</string>
+			<key>UTTypeDescription</key>
+			<string>DragonTrack Farm</string>
+			<key>UTTypeConformsTo</key>
+			<array>
+				<string>public.data</string>
+			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<string>salsfarm</string>
+				<key>public.mime-type</key>
+				<string>application/x-salsfarm</string>
+			</dict>
+		</dict>
+	</array>
+
+	<key>CFBundleDocumentTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleTypeName</key>
+			<string>DragonTrack Farm</string>
+			<key>LSHandlerRank</key>
+			<string>Owner</string>
+			<key>LSItemContentTypes</key>
+			<array>
+				<string>com.df.dragon-fruit-flower-counter.salsfarm</string>
+			</array>
+		</dict>
+	</array>
 </dict>
 </plist>

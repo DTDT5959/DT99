@@ -210,6 +210,92 @@ Future<Map<String, List<int>>> getFullHistoryForFarm(String farmId) async {
     return rows.isEmpty ? null : rows.first;
   }
 
+  /// "Finish Counting": for every post id in [allPostIds] that does not
+  /// already have a record for [date], inserts one with flowerCount = 0.
+  /// Posts that already have a record (any value, including a genuine 0)
+  /// are left completely untouched — existing rows are never overwritten
+  /// here.
+  ///
+  /// Safe to call repeatedly / concurrently: each insert uses
+  /// [ConflictAlgorithm.ignore] against the existing unique (post_id, date)
+  /// index, so a record created by a race (or a second tap of "Finish
+  /// Counting") is silently skipped rather than duplicated or overwritten.
+  Future<void> markRemainingAsZero({
+    required String farmId,
+    required DateTime date,
+    required List<String> allPostIds,
+  }) async {
+    if (allPostIds.isEmpty) return;
+    final existing = await getCountsForFarmDate(farmId, date);
+    final missing = allPostIds.where((id) => !existing.containsKey(id)).toList();
+    if (missing.isEmpty) return;
+
+    final db = await DatabaseHelper.instance.database;
+    final now = DateTime.now();
+    await db.transaction((txn) async {
+      final batch = txn.batch();
+      for (final postId in missing) {
+        final zero = FlowerCount(
+          id: _uuid.v4(),
+          postId: postId,
+          date: date,
+          flowerCount: 0,
+          createdAt: now,
+          updatedAt: now,
+        );
+        batch.insert('flower_counts', zero.toMap(), conflictAlgorithm: ConflictAlgorithm.ignore);
+      }
+      await batch.commit(noResult: true);
+    });
+  }
+
+  /// Counts, for the confirmation dialog, how many distinct counting dates
+  /// and how many individual flower records fall within [from, to]
+  /// (inclusive) for this farm — used by Reset Counting before it deletes
+  /// anything.
+  Future<({int dateCount, int recordCount})> getResetPreview(
+    String farmId, {
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final db = await DatabaseHelper.instance.database;
+    final rows = await db.rawQuery('''
+      SELECT COUNT(DISTINCT fc.date) as date_count, COUNT(*) as record_count
+      FROM flower_counts fc
+      INNER JOIN posts p ON p.id = fc.post_id
+      WHERE p.farm_id = ? AND fc.date >= ? AND fc.date <= ?
+    ''', [farmId, _dateKey(from), _dateKey(to)]);
+    final row = rows.first;
+    return (
+      dateCount: (row['date_count'] as int?) ?? 0,
+      recordCount: (row['record_count'] as int?) ?? 0,
+    );
+  }
+
+  /// "Reset Counting": permanently removes (not zeroes out) every flower
+  /// count record for this farm whose date falls within [from, to]
+  /// inclusive. Trees, layout, boundary, photos, and records outside the
+  /// range are never touched. A tree that had a record inside the range —
+  /// including a genuine 0 — goes back to "not counted" for that date,
+  /// because the row itself is deleted rather than its value changed.
+  ///
+  /// Runs as a single transaction: either the whole range is removed or
+  /// (on error) nothing is, so the database is never left half-reset.
+  Future<void> resetRange({
+    required String farmId,
+    required DateTime from,
+    required DateTime to,
+  }) async {
+    final db = await DatabaseHelper.instance.database;
+    await db.transaction((txn) async {
+      await txn.rawDelete('''
+        DELETE FROM flower_counts
+        WHERE post_id IN (SELECT id FROM posts WHERE farm_id = ?)
+          AND date >= ? AND date <= ?
+      ''', [farmId, _dateKey(from), _dateKey(to)]);
+    });
+  }
+
   /// Inserts fully-formed FlowerCount records exactly as given — own id,
   /// own timestamps, all already set by the caller. Unlike [saveCount],
   /// never checks for an existing (post, date) row first, since these are

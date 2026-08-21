@@ -99,6 +99,52 @@ class _CountingBodyState extends State<_CountingBody> {
     _camera.centerOn(Offset(post.positionX, post.positionY));
   }
 
+  Future<void> _finishCounting(BuildContext context) async {
+    final provider = context.read<CountingProvider>();
+    final remaining = provider.remainingUncounted;
+    if (remaining <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Every post is already counted for this date')),
+      );
+      return;
+    }
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Finish Counting?'),
+        content: Text(
+          'You have $remaining ${remaining == 1 ? 'tree' : 'trees'} remaining.\n\n'
+          'All uncounted trees will be recorded as 0 flowers for '
+          '${DateFormat.yMMMMd().format(widget.date)}.\n\n'
+          'This action will mark those trees as counted with 0 flowers.',
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, true), child: const Text('Finish Counting')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+
+    await provider.finishCounting();
+    if (!context.mounted) return;
+
+    if (provider.isComplete && !_navigatedToSummary) {
+      _navigatedToSummary = true;
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SummaryScreen(
+            farmId: provider.farmId,
+            farmName: widget.farmName,
+            date: widget.date,
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _showFilters(BuildContext context) async {
     await showModalBottomSheet(
       context: context,
@@ -200,6 +246,13 @@ class _CountingBodyState extends State<_CountingBody> {
         actions: [
           IconButton(icon: const Icon(Icons.search), onPressed: () => _searchPostId(context)),
           IconButton(icon: const Icon(Icons.filter_list), onPressed: () => _showFilters(context)),
+          IconButton(
+            icon: const Icon(Icons.done_all),
+            tooltip: 'Finish Counting',
+            // Same rule as tapping a post: counting is only meaningful in
+            // Flower View, where the underlying stored data lives.
+            onPressed: _seasonView == SeasonView.fruit ? null : () => _finishCounting(context),
+          ),
         ],
       ),
       body: Consumer<CountingProvider>(
@@ -240,6 +293,7 @@ class _CountingBodyState extends State<_CountingBody> {
                   posts: visiblePosts,
                   selectedPostId: _highlightedPostId,
                   flowerCounts: flowerCounts,
+                  distinguishNotCounted: true,
                   seasonView: _seasonView,
                   fruitSetPercentage: fruitSetPercentage,
                   onPostTap: (post) => _handlePostTap(context, post),

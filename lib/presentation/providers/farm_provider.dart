@@ -30,4 +30,23 @@ class FarmProvider extends ChangeNotifier {
     await _repo.deleteFarm(id);
     await loadFarms();
   }
+
+  /// Renames an existing farm in place — same id, same trees, boundary,
+  /// counting history, and photos; only the name field changes. Reloads
+  /// the farm list afterward so the new name appears everywhere it's
+  /// displayed (farm list, etc.).
+  Future<Farm> renameFarm(String id, String newName) async {
+    final trimmed = newName.trim();
+    if (trimmed.isEmpty) {
+      throw ArgumentError('Farm name cannot be empty');
+    }
+    final farm = await _repo.getFarm(id);
+    if (farm == null) {
+      throw StateError('Farm not found');
+    }
+    final renamed = farm.copyWith(name: trimmed);
+    await _repo.updateFarm(renamed);
+    await loadFarms();
+    return renamed;
+  }
 }

@@ -57,4 +57,21 @@ class CountingProvider extends ChangeNotifier {
     _counts = {..._counts, postId: saved};
     notifyListeners();
   }
+
+  /// How many posts still have no record for [date] — shown in the
+  /// "Finish Counting" confirmation dialog.
+  int get remainingUncounted => totalPosts - countedPosts;
+
+  /// "Finish Counting": records every currently-uncounted post as 0
+  /// flowers for this date, leaving every existing record (including any
+  /// legitimate zero already saved) untouched. Delegates the actual write
+  /// to FlowerCountRepository so this stays a thin orchestration layer —
+  /// safe to call more than once, since the repository ignores posts that
+  /// already have a record.
+  Future<void> finishCounting() async {
+    final allPostIds = _posts.map((p) => p.id).toList();
+    await _countRepo.markRemainingAsZero(farmId: farmId, date: date, allPostIds: allPostIds);
+    _counts = await _countRepo.getCountsForFarmDate(farmId, date);
+    notifyListeners();
+  }
 }

@@ -70,10 +70,22 @@ class FarmCanvas extends StatefulWidget {
   final void Function(Offset totalDeltaFromDragStart)? onDuplicateGroupDragUpdate;
   final VoidCallback? onDuplicateGroupDragEnd;
 
-  /// Raw flower counts for the active session, postId -> count. Absent
-  /// entries (not yet counted) render identically to a recorded 0 — both
-  /// are the Empty tree state, per spec.
+  /// Raw flower counts for the active session, postId -> count.
+  ///
+  /// When [distinguishNotCounted] is true (the single-date Counting
+  /// screen), a post absent from this map has NOT been counted for this
+  /// date and shows no badge at all, while a post present with value 0 WAS
+  /// counted (as zero flowers) and shows a "0" badge — these two states
+  /// stay visually distinct. When false (the default — Analytics Map and
+  /// Layout Editor, which pass an aggregated total for every post
+  /// regardless of whether it was ever counted), a value of 0 renders
+  /// exactly like an absent entry, same as always.
   final Map<String, int> flowerCounts;
+
+  /// See [flowerCounts]. Defaults to false so every other FarmCanvas call
+  /// site (Analytics Map, Layout Editor) keeps its existing behavior
+  /// unchanged; only the Counting screen opts in.
+  final bool distinguishNotCounted;
 
   /// Which season view to render trees in. Flower View shows the raw
   /// count; Fruit View shows a live-estimated fruit count via
@@ -127,6 +139,7 @@ class FarmCanvas extends StatefulWidget {
     this.onDuplicateGroupDragUpdate,
     this.onDuplicateGroupDragEnd,
     this.flowerCounts = const {},
+    this.distinguishNotCounted = false,
     this.seasonView = SeasonView.flower,
     this.fruitSetPercentage = FruitCalculationService.defaultFruitSetPercentage,
     this.boundaryVertices,
@@ -532,10 +545,18 @@ class _FarmCanvasState extends State<FarmCanvas> {
   }
 
   Widget _buildPost(Post post) {
+    // Only the Counting screen (distinguishNotCounted: true) needs
+    // containsKey to tell "counted as 0" apart from "never counted" — see
+    // [flowerCounts] doc above. Every other caller keeps the original
+    // "flowerCount > 0" behavior untouched.
     final flowerCount = widget.flowerCounts[post.id] ?? 0;
+    final isCounted = widget.distinguishNotCounted
+        ? widget.flowerCounts.containsKey(post.id)
+        : flowerCount > 0;
     final treeState = _calculator.treeStateFor(flowerCount: flowerCount, view: widget.seasonView);
     final displayCount = _calculator.displayCountFor(
       flowerCount: flowerCount,
+      counted: isCounted,
       view: widget.seasonView,
       fruitSetPercentage: widget.fruitSetPercentage,
     );

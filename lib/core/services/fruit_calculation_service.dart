@@ -42,13 +42,20 @@ class FruitCalculationService {
   }
 
   /// The number to display on top of the tree icon for the given view.
-  /// Returns null when the tree is Empty (no number is shown).
+  ///
+  /// [counted] must reflect whether an actual counting record exists for
+  /// this post/date — NOT whether flowerCount > 0. A tree that was
+  /// genuinely counted as 0 flowers still shows "0"; a tree with no record
+  /// at all shows nothing. Counted-zero and not-counted must never be
+  /// conflated (spec: "counted zero" vs "not counted").
   int? displayCountFor({
     required int flowerCount,
+    required bool counted,
     required SeasonView view,
     required double fruitSetPercentage,
   }) {
-    if (flowerCount <= 0) return null;
+    if (!counted) return null;
+    if (flowerCount <= 0) return 0;
     return view == SeasonView.fruit ? estimateFruits(flowerCount, fruitSetPercentage) : flowerCount;
   }
 }

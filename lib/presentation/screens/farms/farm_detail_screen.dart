@@ -8,6 +8,7 @@ import '../../providers/farm_provider.dart';
 import '../../utils/export_helper.dart';
 import '../../widgets/share_farm_sheet.dart';
 import '../counting/date_select_screen.dart';
+import '../counting/reset_counting_screen.dart';
 import '../history/history_screen.dart';
 import '../layout/layout_editor_screen.dart';
 import '../statistics/statistics_screen.dart';
@@ -42,6 +43,11 @@ class _FarmDetailScreenState extends State<FarmDetailScreen> {
       appBar: AppBar(
         title: Text(farm?.name ?? 'Farm'),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.edit_outlined),
+            tooltip: 'Rename Farm',
+            onPressed: farm == null ? null : () => _renameFarm(context, farm),
+          ),
           IconButton(
             icon: const Icon(Icons.ios_share),
             tooltip: 'Export today\'s counts',
@@ -129,6 +135,19 @@ class _FarmDetailScreenState extends State<FarmDetailScreen> {
                 ),
                 const SizedBox(height: 12),
                 _ActionTile(
+                  icon: Icons.restart_alt,
+                  title: 'Reset Counting',
+                  subtitle: 'Remove counting records for a date range',
+                  color: Colors.red,
+                  onTap: () => Navigator.push(
+                    context,
+                    MaterialPageRoute(
+                      builder: (_) => ResetCountingScreen(farmId: farm.id, farmName: farm.name),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                _ActionTile(
                   icon: Icons.bar_chart,
                   title: 'Statistics',
                   subtitle: 'Trends, averages, and top posts',
@@ -200,6 +219,34 @@ class _FarmDetailScreenState extends State<FarmDetailScreen> {
         ),
       ),
     );
+  }
+
+  Future<void> _renameFarm(BuildContext context, Farm farm) async {
+    final controller = TextEditingController(text: farm.name);
+    final farmProvider = context.read<FarmProvider>();
+    final newName = await showDialog<String>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: const Text('Rename Farm'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          textCapitalization: TextCapitalization.words,
+          decoration: const InputDecoration(hintText: 'Farm name'),
+          onSubmitted: (v) => Navigator.pop(ctx, v),
+        ),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx), child: const Text('Cancel')),
+          FilledButton(onPressed: () => Navigator.pop(ctx, controller.text), child: const Text('Save')),
+        ],
+      ),
+    );
+    if (newName == null || newName.trim().isEmpty) return;
+
+    await farmProvider.renameFarm(farm.id, newName);
+    // Refresh this screen's own copy — same id, same trees/boundary/
+    // counting history, only the name changed.
+    await _load();
   }
 
   void _confirmDelete(BuildContext context, Farm farm) {
