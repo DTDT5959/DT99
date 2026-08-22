@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:io';
 
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
@@ -12,13 +11,50 @@ import 'presentation/screens/splash_screen.dart';
 import 'presentation/screens/home_screen.dart';
 import 'presentation/screens/farms/import_farm_preview_screen.dart';
 
-void main() {
+Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const DragonFruitFlowerCounterApp());
+
+  // Resolve a cold-start .salsfarm file (Files app "Open"/"Open With" while
+  // DragonTrack was fully closed), if any, BEFORE building the widget
+  // tree — not inside a StatefulWidget's initState. Doing it here means
+  // there is no race between this async platform-channel call and the
+  // very first MaterialApp.home build: SplashScreen simply receives the
+  // already-resolved answer as a constructor argument, so it can safely
+  // route straight into ImportFarmPreviewScreen with zero risk of running
+  // before the value exists.
+  //
+  // This is also the ONLY place that reads/resets the plugin's one-shot
+  // getInitialMedia() value. HomeScreen (the other consumer, for files
+  // opened while already running or resumed from background) only ever
+  // listens to getMediaStream() — see HomeScreen — never calls
+  // getInitialMedia() itself. Two callers racing to consume-and-reset the
+  // same one-shot value is exactly what silently lost the file before:
+  // whichever one lost the race saw an already-emptied result and fell
+  // back to the ordinary Home screen, which is why the file appeared to
+  // "not be received" even when the native side delivered it correctly.
+  final pendingFarmFile = await _resolvePendingFarmFile();
+
+  runApp(DragonFruitFlowerCounterApp(pendingFarmFile: pendingFarmFile));
+}
+
+Future<String?> _resolvePendingFarmFile() async {
+  try {
+    final files = await ReceiveSharingIntent.instance.getInitialMedia();
+    // Consume it exactly once, right away, so nothing else can read it
+    // again later and (correctly, but confusingly) get nothing back.
+    await ReceiveSharingIntent.instance.reset();
+    for (final file in files) {
+      if (file.path.toLowerCase().endsWith('.salsfarm')) return file.path;
+    }
+  } catch (e) {
+    debugPrint('Initial sharing intent error: $e');
+  }
+  return null;
 }
 
 class DragonFruitFlowerCounterApp extends StatefulWidget {
-  const DragonFruitFlowerCounterApp({super.key});
+  final String? pendingFarmFile;
+  const DragonFruitFlowerCounterApp({super.key, this.pendingFarmFile});
 
   @override
   State<DragonFruitFlowerCounterApp> createState() =>
@@ -29,54 +65,14 @@ class _DragonFruitFlowerCounterAppState
     extends State<DragonFruitFlowerCounterApp> {
   final _settings = SettingsProvider();
 
-  StreamSubscription<List<SharedMediaFile>>? _intentSub;
-
-  String? _pendingFarmFile;
-
   @override
   void initState() {
     super.initState();
-
     _settings.load();
-    _listenForFarmFiles();
-  }
-
-  void _listenForFarmFiles() {
-    // App already running.
-    _intentSub =
-        ReceiveSharingIntent.instance.getMediaStream().listen(
-      (files) {
-        _checkFiles(files);
-      },
-      onError: (error) {
-        debugPrint('Sharing intent error: $error');
-      },
-    );
-
-    // App launched by opening a .salsfarm file.
-    ReceiveSharingIntent.instance.getInitialMedia().then((files) {
-      _checkFiles(files);
-
-      ReceiveSharingIntent.instance.reset();
-    }).catchError((error) {
-      debugPrint('Initial sharing intent error: $error');
-    });
-  }
-
-  void _checkFiles(List<SharedMediaFile> files) {
-    for (final file in files) {
-      if (file.path.toLowerCase().endsWith('.salsfarm')) {
-        _pendingFarmFile = file.path;
-
-        debugPrint('Received farm file: ${file.path}');
-        break;
-      }
-    }
   }
 
   @override
   void dispose() {
-    _intentSub?.cancel();
     _settings.dispose();
     super.dispose();
   }
@@ -102,7 +98,7 @@ class _DragonFruitFlowerCounterAppState
             themeMode: settings.themeMode,
 
             home: SplashScreen(
-              pendingFarmFile: _pendingFarmFile,
+              pendingFarmFile: widget.pendingFarmFile,
             ),
           );
         },

@@ -29,8 +29,17 @@ class _HomeScreenState extends State<HomeScreen> {
     _setupFileListener();
   }
 
-  Future<void> _setupFileListener() async {
-    // Handles a .salsfarm file when DragonTrack is already open.
+  /// Handles a .salsfarm file opened while DragonTrack is already running,
+  /// or resumed to the foreground after being backgrounded — both arrive
+  /// as events on this stream. Deliberately does NOT also call
+  /// getInitialMedia() here: that one-shot cold-start value has exactly
+  /// one owner (main.dart, resolved before runApp() — see its
+  /// _resolvePendingFarmFile()), so it's never read or reset a second
+  /// time here. HomeScreen stays mounted for the app's whole lifetime
+  /// (screens pushed on top of it don't unmount it), so this single
+  /// listener, set up once, correctly covers "already open" and
+  /// "background → foreground" for as long as the app runs.
+  void _setupFileListener() {
     _intentSub = ReceiveSharingIntent.instance.getMediaStream().listen(
       (files) {
         _handleReceivedFiles(files);
@@ -39,19 +48,6 @@ class _HomeScreenState extends State<HomeScreen> {
         debugPrint('File receiving error: $error');
       },
     );
-
-    // Handles a .salsfarm file when DragonTrack was closed.
-    try {
-      final files =
-          await ReceiveSharingIntent.instance.getInitialMedia();
-
-      await _handleReceivedFiles(files);
-
-      // Prevent the same file from being processed again.
-      await ReceiveSharingIntent.instance.reset();
-    } catch (e) {
-      debugPrint('Initial file error: $e');
-    }
   }
 
   Future<void> _handleReceivedFiles(
@@ -75,9 +71,21 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
+    // Set the guard synchronously, before the first `await` below — not
+    // right before the Navigator.push call as before. iOS is known to
+    // occasionally redeliver the same open-URL/scene event twice in quick
+    // succession; with the guard set only right before push(), a second
+    // event could reach this method and pass the `_openingFarmFile` check
+    // above while the first call was still suspended on `file.exists()`,
+    // opening two preview screens for the same file. Setting it here, and
+    // resetting it on every exit path below, closes that gap.
+    _openingFarmFile = true;
+
     final file = File(farmFile.path);
 
     if (!await file.exists()) {
+      _openingFarmFile = false;
+
       if (!mounted) return;
 
       ScaffoldMessenger.of(context).showSnackBar(
@@ -89,9 +97,10 @@ class _HomeScreenState extends State<HomeScreen> {
       return;
     }
 
-    if (!mounted) return;
-
-    _openingFarmFile = true;
+    if (!mounted) {
+      _openingFarmFile = false;
+      return;
+    }
 
     await Navigator.of(context).push(
       MaterialPageRoute(
