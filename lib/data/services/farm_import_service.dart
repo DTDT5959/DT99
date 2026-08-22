@@ -8,11 +8,13 @@ import 'package:uuid/uuid.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/database/database_helper.dart';
+import '../models/farm_drawing.dart';
 import '../models/farm_package.dart';
 import '../models/field_boundary.dart';
 import '../models/flower_count.dart';
 import '../models/photo.dart';
 import '../models/post.dart';
+import '../repositories/farm_drawing_repository.dart';
 import '../repositories/farm_repository.dart';
 import '../repositories/field_boundary_repository.dart';
 import '../repositories/flower_count_repository.dart';
@@ -32,6 +34,7 @@ class FarmImportService {
   final PostRepository _postRepo;
   final FlowerCountRepository _flowerRepo;
   final FieldBoundaryRepository _boundaryRepo;
+  final FarmDrawingRepository _drawingRepo;
   final PhotoRepository _photoRepo;
 
   FarmImportService({
@@ -39,11 +42,13 @@ class FarmImportService {
     PostRepository? postRepo,
     FlowerCountRepository? flowerRepo,
     FieldBoundaryRepository? boundaryRepo,
+    FarmDrawingRepository? drawingRepo,
     PhotoRepository? photoRepo,
   })  : _farmRepo = farmRepo ?? FarmRepository(),
         _postRepo = postRepo ?? PostRepository(),
         _flowerRepo = flowerRepo ?? FlowerCountRepository(),
         _boundaryRepo = boundaryRepo ?? FieldBoundaryRepository(),
+        _drawingRepo = drawingRepo ?? FarmDrawingRepository(),
         _photoRepo = photoRepo ?? PhotoRepository();
 
   /// Reads and validates [file] without touching the database. Throws
@@ -208,6 +213,29 @@ class FarmImportService {
         });
         await _boundaryRepo.insertBoundary(boundary, executor: txn);
       }
+
+      // Farm Layout Painter drawings: fresh id + remapped farmId per
+      // drawing, same as everything else here — never reuse a sender-side
+      // id. A drawing has no reference to any post, so unlike flower
+      // counts/photos there's no postIdMap lookup involved. A malformed
+      // entry (missing/wrong-typed field) is skipped rather than failing
+      // the whole import, matching the photos loop's leniency below —
+      // drawings are purely visual, so one bad entry shouldn't sink an
+      // otherwise valid farm.
+      final newDrawings = <FarmDrawing>[];
+      for (final map in package.drawingMaps) {
+        try {
+          final drawing = FarmDrawing.fromMap({
+            ...map,
+            'id': _uuid.v4(),
+            'farm_id': newFarmId,
+          });
+          newDrawings.add(drawing);
+        } catch (_) {
+          continue;
+        }
+      }
+      await _drawingRepo.insertBatch(newDrawings, executor: txn);
 
       final newCounts = <FlowerCount>[];
       for (final map in package.flowerCountMaps) {

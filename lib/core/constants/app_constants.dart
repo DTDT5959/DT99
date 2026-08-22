@@ -114,6 +114,32 @@ enum BoundaryMode { none, creating, editing }
 /// time, mirroring EditorTool's single-active-tool pattern.
 enum BoundaryEditTool { move, addPoint, deletePoint }
 
+/// A Farm Layout Painter annotation type — a farmer-drawn visual marking
+/// only. NEVER a tree, boundary, farm structure, counting area, or
+/// database relationship of any kind (see FarmDrawing).
+enum DrawingType { line, rectangle }
+
+extension DrawingTypeX on DrawingType {
+  /// Stored representation in SQLite (keep stable — used as a DB value).
+  String get dbValue => name;
+
+  static DrawingType fromDb(String value) {
+    return DrawingType.values.firstWhere(
+      (t) => t.dbValue == value,
+      orElse: () => DrawingType.line,
+    );
+  }
+}
+
+/// Which phase of the Farm Layout Painter workflow the editor is in.
+/// `off` = normal layout editing, drawings are just rendered; `line` /
+/// `rectangle` = a drag on the canvas creates that shape; `erase` = a tap
+/// on an existing drawing deletes it. Mirrors BoundaryMode's
+/// single-active-mode pattern, and is deliberately a separate concept
+/// from EditorTool — Draw is its own exclusive top-level mode, not one of
+/// the tree tools.
+enum PainterMode { off, line, rectangle, erase }
+
 /// How the farm layout is being rendered right now.
 /// 2D is the default, editable, fast-counting map (unchanged FarmCanvas).
 /// 3D is a read-only isometric presentation view for visualization only —

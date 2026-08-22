@@ -1,14 +1,17 @@
 import 'package:flutter/foundation.dart';
 
 import '../../core/constants/app_constants.dart';
+import '../../data/models/farm_drawing.dart';
 import '../../data/models/flower_count.dart';
 import '../../data/models/post.dart';
+import '../../data/repositories/farm_drawing_repository.dart';
 import '../../data/repositories/flower_count_repository.dart';
 import '../../data/repositories/post_repository.dart';
 
 class CountingProvider extends ChangeNotifier {
   final PostRepository _postRepo = PostRepository();
   final FlowerCountRepository _countRepo = FlowerCountRepository();
+  final FarmDrawingRepository _drawingRepo = FarmDrawingRepository();
 
   final String farmId;
   final DateTime date;
@@ -16,10 +19,12 @@ class CountingProvider extends ChangeNotifier {
 
   List<Post> _posts = [];
   Map<String, FlowerCount> _counts = {}; // postId -> count for `date`
+  List<FarmDrawing> _drawings = []; // Farm Layout Painter annotations — read-only during counting
   bool _loading = false;
 
   List<Post> get posts => _posts;
   Map<String, FlowerCount> get counts => _counts;
+  List<FarmDrawing> get drawings => _drawings;
   bool get loading => _loading;
 
   int get totalPosts => _posts.length;
@@ -43,6 +48,7 @@ class CountingProvider extends ChangeNotifier {
     notifyListeners();
     _posts = await _postRepo.getPostsForFarm(farmId);
     _counts = await _countRepo.getCountsForFarmDate(farmId, date);
+    _drawings = await _drawingRepo.getForFarm(farmId);
     _loading = false;
     notifyListeners();
   }

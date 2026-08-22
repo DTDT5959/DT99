@@ -294,6 +294,7 @@ class _CountingBodyState extends State<_CountingBody> {
                   selectedPostId: _highlightedPostId,
                   flowerCounts: flowerCounts,
                   distinguishNotCounted: true,
+                  drawings: provider.drawings,
                   seasonView: _seasonView,
                   fruitSetPercentage: fruitSetPercentage,
                   onPostTap: (post) => _handlePostTap(context, post),

@@ -139,6 +139,13 @@ class GeometryService {
     return (p - projection).distance;
   }
 
+  /// Public wrapper around the same point-to-segment distance primitive
+  /// used internally by [nearestSegmentIndex] — exposed for other
+  /// hit-testing callers (e.g. FarmCanvas's Farm Layout Painter eraser,
+  /// which needs this directly rather than through a polygon-specific
+  /// operation) so the math isn't duplicated.
+  double distanceToSegment(Offset p, Offset a, Offset b) => _distanceToSegment(p, a, b);
+
   /// Which posts (by id) fall outside the polygon (footprint not fully
   /// contained) — used after a boundary edit to warn about affected trees.
   /// Returns an empty list when there's no boundary (unconstrained).

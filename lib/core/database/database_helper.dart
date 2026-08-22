@@ -23,7 +23,7 @@ class DatabaseHelper {
     final path = join(dbPath, 'dragon_fruit_flower_counter.db');
     return openDatabase(
       path,
-      version: 3,
+      version: 4,
       onCreate: _onCreate,
       onUpgrade: _onUpgrade,
       onConfigure: (db) async => db.execute('PRAGMA foreign_keys = ON'),
@@ -36,6 +36,9 @@ class DatabaseHelper {
     }
     if (oldVersion < 3) {
       await _addFarmImportedAtColumn(db);
+    }
+    if (oldVersion < 4) {
+      await _createFarmDrawingsTable(db);
     }
   }
 
@@ -60,6 +63,29 @@ class DatabaseHelper {
   /// locally-created farm.
   Future<void> _addFarmImportedAtColumn(Database db) async {
     await db.execute('ALTER TABLE farms ADD COLUMN imported_at TEXT');
+  }
+
+  /// Farm Layout Painter: purely visual line/rectangle annotations, one
+  /// table shared by every farm (scoped by farm_id, same as
+  /// field_boundaries). No `is_synced` column — drawings aren't part of
+  /// the sync-ready design the other tables anticipate, since they're
+  /// disposable visual markers rather than farm data of record; this can
+  /// be added later without a data migration if that changes.
+  Future<void> _createFarmDrawingsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS farm_drawings (
+        id TEXT PRIMARY KEY,
+        farm_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        start_x REAL NOT NULL,
+        start_y REAL NOT NULL,
+        end_x REAL NOT NULL,
+        end_y REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (farm_id) REFERENCES farms (id) ON DELETE CASCADE
+      )
+    ''');
+    await db.execute('CREATE INDEX IF NOT EXISTS idx_drawings_farm ON farm_drawings (farm_id)');
   }
 
   Future<void> _onCreate(Database db, int version) async {
@@ -133,11 +159,26 @@ class DatabaseHelper {
       )
     ''');
 
+    batch.execute('''
+      CREATE TABLE farm_drawings (
+        id TEXT PRIMARY KEY,
+        farm_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        start_x REAL NOT NULL,
+        start_y REAL NOT NULL,
+        end_x REAL NOT NULL,
+        end_y REAL NOT NULL,
+        created_at TEXT NOT NULL,
+        FOREIGN KEY (farm_id) REFERENCES farms (id) ON DELETE CASCADE
+      )
+    ''');
+
     batch.execute('CREATE INDEX idx_posts_farm ON posts (farm_id)');
     batch.execute('CREATE INDEX idx_counts_post_date ON flower_counts (post_id, date)');
     batch.execute('CREATE UNIQUE INDEX idx_counts_post_date_unique ON flower_counts (post_id, date)');
     batch.execute('CREATE INDEX idx_photos_post ON photos (post_id)');
     batch.execute('CREATE INDEX idx_boundaries_farm ON field_boundaries (farm_id)');
+    batch.execute('CREATE INDEX idx_drawings_farm ON farm_drawings (farm_id)');
 
     await batch.commit(noResult: true);
   }

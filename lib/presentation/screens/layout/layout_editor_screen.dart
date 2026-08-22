@@ -3,6 +3,7 @@ import 'package:provider/provider.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../core/services/geometry_service.dart';
+import '../../../data/models/farm_drawing.dart';
 import '../../../data/models/post.dart';
 import '../../providers/layout_editor_provider.dart';
 import '../../widgets/add_tree_row_sheet.dart';
@@ -440,6 +441,51 @@ class _LayoutEditorBodyState extends State<_LayoutEditorBody> {
   }
 
   // -------------------------------------------------------------------
+  // Farm Layout Painter (spec: Line, Rectangle, Eraser, Undo, Done).
+  // -------------------------------------------------------------------
+  Future<void> _handleDrawComplete(
+    BuildContext context,
+    LayoutEditorProvider provider,
+    DrawingType type,
+    Offset worldStart,
+    Offset worldEnd,
+  ) async {
+    await provider.addDrawing(type, worldStart, worldEnd);
+  }
+
+  /// Eraser tool: highlight first, then confirm before deleting — mirrors
+  /// the tap-to-confirm-delete pattern already used for trees
+  /// (_confirmDeletePost) rather than inventing a new interaction.
+  Future<void> _handleDrawingTap(
+    BuildContext context,
+    LayoutEditorProvider provider,
+    FarmDrawing drawing,
+  ) async {
+    provider.highlightDrawing(drawing.id);
+    final label = drawing.type == DrawingType.line ? 'line' : 'rectangle';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        title: Text('Delete this $label?'),
+        content: const Text('This removes only this drawing — trees, boundary, and counting data are unaffected.'),
+        actions: [
+          TextButton(onPressed: () => Navigator.pop(ctx, false), child: const Text('Cancel')),
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.red),
+            onPressed: () => Navigator.pop(ctx, true),
+            child: const Text('Delete'),
+          ),
+        ],
+      ),
+    );
+    if (confirmed == true) {
+      await provider.deleteDrawing(drawing.id);
+    } else {
+      provider.highlightDrawing(null);
+    }
+  }
+
+  // -------------------------------------------------------------------
   // Fit Field: moves/zooms the CAMERA ONLY so the whole boundary is
   // visible — never resizes or affects the underlying infinite workspace.
   // Works for any polygon shape since it only uses the bounding box.
@@ -530,10 +576,13 @@ class _LayoutEditorBodyState extends State<_LayoutEditorBody> {
                   postsDraggable: provider.tool == EditorTool.move &&
                       provider.boundaryMode == BoundaryMode.none &&
                       !provider.isPlacingRow &&
-                      !provider.isDuplicatePlacementMode,
+                      !provider.isDuplicatePlacementMode &&
+                      provider.painterMode == PainterMode.off,
                   onCanvasTap: (worldPos) => _handleCanvasTap(context, worldPos),
                   onPostTap: (post) => _handlePostTap(context, post),
-                  onPostLongPress: provider.boundaryMode == BoundaryMode.none && !provider.isDuplicatePlacementMode
+                  onPostLongPress: provider.boundaryMode == BoundaryMode.none &&
+                          !provider.isDuplicatePlacementMode &&
+                          provider.painterMode == PainterMode.off
                       ? (post) => Navigator.push(
                             context,
                             MaterialPageRoute(builder: (_) => PostHistoryScreen(postId: post.id)),
@@ -544,7 +593,7 @@ class _LayoutEditorBodyState extends State<_LayoutEditorBody> {
                   onDragEnd: (post) => provider.finalizePostDrag(post.id),
                   boundaryVertices: provider.boundary?.vertices,
                   draftBoundaryVertices: provider.draftVertices,
-                  boundaryEditable: provider.boundaryMode == BoundaryMode.editing,
+                  boundaryEditable: provider.painterMode == PainterMode.off && provider.boundaryMode == BoundaryMode.editing,
                   onBoundaryVertexDragStart: (i) => _onVertexDragStart(context, i),
                   onBoundaryVertexDragUpdate: (i, pos) => _onVertexDragUpdate(context, i, pos),
                   onBoundaryVertexDragEnd: (i) => _onVertexDragEnd(context, i),
@@ -562,14 +611,16 @@ class _LayoutEditorBodyState extends State<_LayoutEditorBody> {
                       provider.hasSelection &&
                       provider.boundaryMode == BoundaryMode.none &&
                       !provider.isPlacingRow &&
-                      !provider.isDuplicatePlacementMode,
+                      !provider.isDuplicatePlacementMode &&
+                      provider.painterMode == PainterMode.off,
                   onGroupDragStart: provider.beginGroupMove,
                   onGroupDragUpdate: provider.updateGroupMove,
                   onGroupDragEnd: provider.finalizeGroupMove,
                   selectionRectEnabled: provider.tool == EditorTool.select &&
                       provider.boundaryMode == BoundaryMode.none &&
                       !provider.isPlacingRow &&
-                      !provider.isDuplicatePlacementMode,
+                      !provider.isDuplicatePlacementMode &&
+                      provider.painterMode == PainterMode.off,
                   onSelectionRectComplete: provider.selectPostsInRect,
                   // --- Duplicate Group placement ---
                   duplicateGroupPositions: provider.duplicateGroupPositions,
@@ -578,6 +629,17 @@ class _LayoutEditorBodyState extends State<_LayoutEditorBody> {
                   onDuplicateGroupDragStart: provider.beginDuplicateGroupDrag,
                   onDuplicateGroupDragUpdate: provider.updateDuplicateGroupDrag,
                   onDuplicateGroupDragEnd: provider.endDuplicateGroupDrag,
+                  // --- Farm Layout Painter ---
+                  drawings: provider.drawings,
+                  activeDrawingTool: provider.painterMode == PainterMode.line
+                      ? DrawingType.line
+                      : provider.painterMode == PainterMode.rectangle
+                          ? DrawingType.rectangle
+                          : null,
+                  onDrawComplete: (type, start, end) => _handleDrawComplete(context, provider, type, start, end),
+                  eraseDrawingMode: provider.painterMode == PainterMode.erase,
+                  onDrawingTap: (drawing) => _handleDrawingTap(context, provider, drawing),
+                  highlightedDrawingId: provider.highlightedDrawingId,
                 ),
               ),
               _EditorToolbar(
@@ -760,6 +822,39 @@ class _EditorToolbar extends StatelessWidget {
       ];
     }
 
+    // Farm Layout Painter owns the toolbar exclusively while active — same
+    // priority tier as Duplicate Group placement above, and checked before
+    // multi-select/row/boundary so none of those can be entered mid-draw.
+    if (provider.painterMode != PainterMode.off) {
+      return [
+        _ToolButton(
+          icon: Icons.show_chart,
+          label: 'Line',
+          active: provider.painterMode == PainterMode.line,
+          onTap: () => provider.setPainterMode(PainterMode.line),
+        ),
+        _ToolButton(
+          icon: Icons.crop_square,
+          label: 'Rectangle',
+          active: provider.painterMode == PainterMode.rectangle,
+          onTap: () => provider.setPainterMode(PainterMode.rectangle),
+        ),
+        _ToolButton(
+          icon: Icons.auto_fix_normal_outlined,
+          label: 'Eraser',
+          active: provider.painterMode == PainterMode.erase,
+          onTap: () => provider.setPainterMode(PainterMode.erase),
+        ),
+        _ToolButton(
+          icon: Icons.undo,
+          label: 'Undo',
+          enabled: provider.canUndoDrawing,
+          onTap: provider.undoLastDrawing,
+        ),
+        _ToolButton(icon: Icons.check, label: 'Done', onTap: () => provider.setPainterMode(PainterMode.off)),
+      ];
+    }
+
     // A non-empty multi-select group gets its own action bar — Color,
     // Duplicate, and Delete all act on selectedPostIds as a whole (spec
     // §26-37) no matter which tool is active. Move happens by dragging a
@@ -864,6 +959,11 @@ class _EditorToolbar extends StatelessWidget {
         label: 'Select',
         active: provider.tool == EditorTool.select,
         onTap: () => provider.setTool(EditorTool.select),
+      ),
+      _ToolButton(
+        icon: Icons.brush_outlined,
+        label: 'Draw',
+        onTap: () => provider.setPainterMode(PainterMode.line),
       ),
       _ToolButton(
         icon: Icons.hexagon_outlined,

@@ -6,6 +6,7 @@ import 'package:path/path.dart' as p;
 import 'package:path_provider/path_provider.dart';
 
 import '../models/farm_package.dart';
+import '../repositories/farm_drawing_repository.dart';
 import '../repositories/farm_repository.dart';
 import '../repositories/field_boundary_repository.dart';
 import '../repositories/flower_count_repository.dart';
@@ -13,10 +14,10 @@ import '../repositories/photo_repository.dart';
 import '../repositories/post_repository.dart';
 
 /// Builds a complete, portable .salsfarm package for one farm — every
-/// tree, boundary point, flower-count record, and post photo that
-/// logically belongs to it (see FarmPackage) — and writes it to a
-/// share-ready temp file. Never touches the UI; ShareFarmSheet calls this
-/// and hands the resulting file to share_plus.
+/// tree, boundary point, flower-count record, Farm Layout Painter drawing,
+/// and post photo that logically belongs to it (see FarmPackage) — and
+/// writes it to a share-ready temp file. Never touches the UI; ShareFarmSheet
+/// calls this and hands the resulting file to share_plus.
 ///
 /// Deliberately reuses the SAME repositories and models the rest of the
 /// app already uses for this farm: export is just "read everything
@@ -27,6 +28,7 @@ class FarmExportService {
   final PostRepository _postRepo;
   final FlowerCountRepository _flowerRepo;
   final FieldBoundaryRepository _boundaryRepo;
+  final FarmDrawingRepository _drawingRepo;
   final PhotoRepository _photoRepo;
 
   FarmExportService({
@@ -34,11 +36,13 @@ class FarmExportService {
     PostRepository? postRepo,
     FlowerCountRepository? flowerRepo,
     FieldBoundaryRepository? boundaryRepo,
+    FarmDrawingRepository? drawingRepo,
     PhotoRepository? photoRepo,
   })  : _farmRepo = farmRepo ?? FarmRepository(),
         _postRepo = postRepo ?? PostRepository(),
         _flowerRepo = flowerRepo ?? FlowerCountRepository(),
         _boundaryRepo = boundaryRepo ?? FieldBoundaryRepository(),
+        _drawingRepo = drawingRepo ?? FarmDrawingRepository(),
         _photoRepo = photoRepo ?? PhotoRepository();
 
   /// Loads every record that belongs to [farmId], builds the package, and
@@ -57,6 +61,7 @@ class FarmExportService {
 
     final posts = await _postRepo.getPostsForFarm(farmId);
     final boundary = await _boundaryRepo.getForFarm(farmId);
+    final drawings = await _drawingRepo.getForFarm(farmId);
 
     final flowerCountMaps = <Map<String, dynamic>>[];
     final countingDates = <String>{};
@@ -90,6 +95,7 @@ class FarmExportService {
       postMaps: posts.map((post) => post.toMap()).toList(),
       flowerCountMaps: flowerCountMaps,
       photos: packagePhotos,
+      drawingMaps: drawings.map((d) => d.toMap()).toList(),
     );
 
     final archive = Archive();

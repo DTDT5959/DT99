@@ -2,9 +2,12 @@ import 'package:flutter/material.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/services/fruit_calculation_service.dart';
+import '../../core/services/geometry_service.dart';
+import '../../data/models/farm_drawing.dart';
 import '../../data/models/post.dart';
 import 'camera_controller.dart';
 import 'duplicate_group_layer.dart';
+import 'farm_drawing_layer.dart';
 import 'field_boundary_layer.dart';
 import 'post_marker.dart';
 import 'row_placement_layer.dart';
@@ -113,6 +116,33 @@ class FarmCanvas extends StatefulWidget {
   final void Function(Offset newWorldPos)? onRowStartDragUpdate;
   final void Function(Offset newWorldPos)? onRowEndDragUpdate;
 
+  // --- Farm Layout Painter passthrough (all optional; canvas works
+  // exactly as before if none of these are supplied) --------------------
+  /// Every saved drawing for this farm — always rendered (including
+  /// during Counting, where it's the only painter param that matters:
+  /// drawings there are purely visual, read-only, and can't be tapped,
+  /// moved, or deleted — see [activeDrawingTool]/[eraseDrawingMode] below,
+  /// which the Counting screen simply never sets).
+  final List<FarmDrawing> drawings;
+
+  /// Non-null (line or rectangle) while the Painter's Line/Rectangle tool
+  /// is active — a drag on the canvas then creates that shape instead of
+  /// panning the camera, moving a tree, or anything else (this is an
+  /// exclusive top-level mode, same as Duplicate Group placement). Null
+  /// (the default) everywhere else, including every existing call site.
+  final DrawingType? activeDrawingTool;
+  final void Function(DrawingType type, Offset worldStart, Offset worldEnd)? onDrawComplete;
+
+  /// True while the Painter's Eraser tool is active — a tap then
+  /// hit-tests ONLY drawings (never a tree, never "add tree on tap"); see
+  /// [onDrawingTap]. False (the default) everywhere else.
+  final bool eraseDrawingMode;
+  final void Function(FarmDrawing drawing)? onDrawingTap;
+
+  /// While erasing, the drawing currently highlighted (last tapped) —
+  /// purely visual, passed straight through to FarmDrawingLayer.
+  final String? highlightedDrawingId;
+
   const FarmCanvas({
     super.key,
     required this.camera,
@@ -156,6 +186,12 @@ class FarmCanvas extends StatefulWidget {
     this.rowPreviewColor = PostColor.yellow,
     this.onRowStartDragUpdate,
     this.onRowEndDragUpdate,
+    this.drawings = const [],
+    this.activeDrawingTool,
+    this.onDrawComplete,
+    this.eraseDrawingMode = false,
+    this.onDrawingTap,
+    this.highlightedDrawingId,
   });
 
   @override
@@ -181,10 +217,11 @@ class FarmCanvas extends StatefulWidget {
 /// onTapUp for "tap empty canvas to add a tree" — was unconditionally
 /// firing onCanvasTap for every tap with no hit-test of its own, regardless
 /// of what a nested widget's onTap might also have fired for).
-enum _DragTarget { none, camera, post, boundaryVertex, rowStart, rowEnd, group, duplicateGroup, selectionRect }
+enum _DragTarget { none, camera, post, boundaryVertex, rowStart, rowEnd, group, duplicateGroup, selectionRect, draw }
 
 class _FarmCanvasState extends State<FarmCanvas> {
   static const _calculator = FruitCalculationService();
+  static const _geometry = GeometryService();
 
   Offset? _gestureStartFocalWorld;
   double _gestureStartZoom = 1.0;
@@ -206,6 +243,13 @@ class _FarmCanvasState extends State<FarmCanvas> {
   // it's a transient UI overlay independent of world content.
   Offset? _selectionRectStartScreen;
   Offset? _selectionRectCurrentScreen;
+
+  // Farm Layout Painter live preview (Line/Rectangle tool), also tracked
+  // in screen space for the same reason as the selection rectangle above
+  // — it's a transient overlay, converted to world coordinates only once,
+  // at gesture end, when the drawing is actually committed.
+  Offset? _drawStartScreen;
+  Offset? _drawCurrentScreen;
 
   /// Screen-space touch tolerance for "did the finger land on this
   /// element", converted to world units so it stays a consistent finger-
@@ -258,6 +302,31 @@ class _FarmCanvasState extends State<FarmCanvas> {
     return null;
   }
 
+  /// Finds the drawing under [worldPos], if any — only ever called while
+  /// the Painter's Eraser tool is active. A line counts as hit within a
+  /// small tolerance of the segment itself; a rectangle counts as hit
+  /// near any of its four edges (tapping empty space inside the rectangle
+  /// does NOT hit it — only the drawn outline does, matching "tap a line
+  /// or rectangle to select it" in the spec). Iterates newest-first so an
+  /// overlapping later drawing — the one visually on top — wins.
+  FarmDrawing? _hitTestDrawing(Offset worldPos) {
+    final tolerance = _hitRadiusWorld();
+    for (final d in widget.drawings.reversed) {
+      if (d.type == DrawingType.line) {
+        if (_geometry.distanceToSegment(worldPos, d.start, d.end) <= tolerance) return d;
+        continue;
+      }
+      final rect = Rect.fromPoints(d.start, d.end);
+      final corners = [rect.topLeft, rect.topRight, rect.bottomRight, rect.bottomLeft];
+      for (var i = 0; i < 4; i++) {
+        if (_geometry.distanceToSegment(worldPos, corners[i], corners[(i + 1) % 4]) <= tolerance) {
+          return d;
+        }
+      }
+    }
+    return null;
+  }
+
   void _handleScaleStart(ScaleStartDetails details) {
     _gestureStartZoom = widget.camera.zoom;
     final worldPos = _toWorld(details.localFocalPoint);
@@ -267,6 +336,12 @@ class _FarmCanvasState extends State<FarmCanvas> {
       setState(() {
         _selectionRectStartScreen = details.localFocalPoint;
         _selectionRectCurrentScreen = details.localFocalPoint;
+      });
+    }
+    if (_dragTarget == _DragTarget.draw) {
+      setState(() {
+        _drawStartScreen = details.localFocalPoint;
+        _drawCurrentScreen = details.localFocalPoint;
       });
     }
   }
@@ -279,6 +354,14 @@ class _FarmCanvasState extends State<FarmCanvas> {
   /// applicable, so this costs nothing extra outside those modes.
   _DragTarget _resolveDragTarget(Offset worldPos) {
     final hitRadius = _hitRadiusWorld();
+
+    // Farm Layout Painter (Line/Rectangle) owns 100% of the gesture while
+    // active — an exclusive top-level mode, same as Duplicate Group
+    // placement below, so it's checked first: while drawing, nothing else
+    // (trees, boundary, row handles) should be reachable via drag.
+    if (widget.activeDrawingTool != null) {
+      return _DragTarget.draw;
+    }
 
     // Duplicate Group placement takes priority over everything else while
     // active (spec §21) — any touch on any member starts the group drag.
@@ -363,6 +446,9 @@ class _FarmCanvasState extends State<FarmCanvas> {
       case _DragTarget.selectionRect:
         setState(() => _selectionRectCurrentScreen = details.localFocalPoint);
         return;
+      case _DragTarget.draw:
+        setState(() => _drawCurrentScreen = details.localFocalPoint);
+        return;
       case _DragTarget.camera:
       case _DragTarget.none:
         final startWorld = _gestureStartFocalWorld;
@@ -408,6 +494,25 @@ class _FarmCanvasState extends State<FarmCanvas> {
           _selectionRectCurrentScreen = null;
         });
         break;
+      case _DragTarget.draw:
+        final startScreen = _drawStartScreen;
+        final endScreen = _drawCurrentScreen;
+        final tool = widget.activeDrawingTool;
+        if (startScreen != null && endScreen != null && tool != null) {
+          final a = _toWorld(startScreen);
+          final b = _toWorld(endScreen);
+          // A near-zero drag is an accidental tap, not an intentional
+          // line/rectangle — don't save a zero-length/zero-area drawing
+          // no one meant to create.
+          if ((b - a).distance > 4 / widget.camera.zoom) {
+            widget.onDrawComplete?.call(tool, a, b);
+          }
+        }
+        setState(() {
+          _drawStartScreen = null;
+          _drawCurrentScreen = null;
+        });
+        break;
       case _DragTarget.rowStart:
       case _DragTarget.rowEnd:
       case _DragTarget.camera:
@@ -430,6 +535,22 @@ class _FarmCanvasState extends State<FarmCanvas> {
   /// through the exact same check, not just the newest one.
   void _handleTapUp(TapUpDetails details) {
     final worldPos = _toWorld(details.localPosition);
+
+    // Farm Layout Painter: while actively drawing, a plain tap (a drag
+    // too short to register as an intentional line/rectangle — see
+    // _handleScaleEnd) does nothing at all. It must NOT fall through to
+    // tree/boundary/canvas taps underneath.
+    if (widget.activeDrawingTool != null) return;
+
+    // Eraser tool: taps hit-test ONLY drawings — never a tree, never
+    // "add tree on tap", never a boundary vertex. Per spec: "The delete
+    // hit-test must only target drawings while drawing-delete mode is
+    // active."
+    if (widget.eraseDrawingMode) {
+      final drawing = _hitTestDrawing(worldPos);
+      if (drawing != null) widget.onDrawingTap?.call(drawing);
+      return;
+    }
 
     if (widget.boundaryEditable) {
       final vertexIndex = _hitTestBoundaryVertex(worldPos);
@@ -501,6 +622,11 @@ class _FarmCanvasState extends State<FarmCanvas> {
                               draftVertices: widget.draftBoundaryVertices,
                               editable: widget.boundaryEditable,
                             ),
+                          if (widget.drawings.isNotEmpty)
+                            FarmDrawingLayer(
+                              drawings: widget.drawings,
+                              highlightedDrawingId: widget.highlightedDrawingId,
+                            ),
                           ...widget.posts.map((post) => _buildPost(post)),
                           if (widget.rowHandleStart != null && widget.rowHandleEnd != null)
                             RowPlacementLayer(
@@ -530,6 +656,22 @@ class _FarmCanvasState extends State<FarmCanvas> {
                             painter: _SelectionRectPainter(
                               start: _selectionRectStartScreen!,
                               end: _selectionRectCurrentScreen!,
+                            ),
+                          ),
+                        ),
+                      ),
+                    // Layer 6: Farm Layout Painter live preview (Line /
+                    // Rectangle), also in screen space — the shape is only
+                    // converted to world coordinates and committed once
+                    // the drag ends (see _handleScaleEnd).
+                    if (_drawStartScreen != null && _drawCurrentScreen != null && widget.activeDrawingTool != null)
+                      Positioned.fill(
+                        child: IgnorePointer(
+                          child: CustomPaint(
+                            painter: _DrawPreviewPainter(
+                              type: widget.activeDrawingTool!,
+                              start: _drawStartScreen!,
+                              end: _drawCurrentScreen!,
                             ),
                           ),
                         ),
@@ -638,6 +780,37 @@ class _SelectionRectPainter extends CustomPainter {
   @override
   bool shouldRepaint(covariant _SelectionRectPainter oldDelegate) {
     return oldDelegate.start != start || oldDelegate.end != end;
+  }
+}
+
+/// Screen-space live preview for the Farm Layout Painter's Line/Rectangle
+/// tool while actively dragging — mirrors _SelectionRectPainter's
+/// approach (transient overlay, not world content). The committed
+/// drawing is rendered separately, in world space, by FarmDrawingLayer
+/// once the gesture ends.
+class _DrawPreviewPainter extends CustomPainter {
+  final DrawingType type;
+  final Offset start;
+  final Offset end;
+  _DrawPreviewPainter({required this.type, required this.start, required this.end});
+
+  @override
+  void paint(Canvas canvas, Size size) {
+    final paint = Paint()
+      ..color = const Color(0xFF37474F).withValues(alpha: 0.8)
+      ..style = PaintingStyle.stroke
+      ..strokeWidth = 2.5
+      ..strokeCap = StrokeCap.round;
+    if (type == DrawingType.line) {
+      canvas.drawLine(start, end, paint);
+    } else {
+      canvas.drawRect(Rect.fromPoints(start, end), paint);
+    }
+  }
+
+  @override
+  bool shouldRepaint(covariant _DrawPreviewPainter oldDelegate) {
+    return oldDelegate.type != type || oldDelegate.start != start || oldDelegate.end != end;
   }
 }
 

@@ -33,6 +33,14 @@ class FarmPackage {
   /// One Post.toMap() per tree.
   final List<Map<String, dynamic>> postMaps;
 
+  /// One FarmDrawing.toMap() per Farm Layout Painter annotation (line or
+  /// rectangle). Purely visual, never affects import validation — an old
+  /// package simply has none (defaults to an empty list), and an old app
+  /// version reading a new manifest just ignores this key, so no version
+  /// bump was needed to add it (spec: "Do not break compatibility with
+  /// existing .salsfarm files that do not contain drawings").
+  final List<Map<String, dynamic>> drawingMaps;
+
   /// One FlowerCount.toMap() per historical counting record, across every
   /// tree and every date — the full history, never flattened to only the
   /// latest count (spec §18).
@@ -47,6 +55,7 @@ class FarmPackage {
     required this.postMaps,
     required this.flowerCountMaps,
     required this.photos,
+    this.drawingMaps = const [],
   });
 
   Map<String, dynamic> toManifestJson() => {
@@ -58,6 +67,7 @@ class FarmPackage {
         'posts': postMaps,
         'flower_counts': flowerCountMaps,
         'photos': photos.map((p) => p.toMap()).toList(),
+        'drawings': drawingMaps,
       };
 
   /// Parses a decoded manifest.json. Throws [FarmPackageFormatException]
@@ -88,6 +98,7 @@ class FarmPackage {
     final boundaryRaw = json['boundary'];
     final flowerCountsRaw = json['flower_counts'];
     final photosRaw = json['photos'];
+    final drawingsRaw = json['drawings'];
 
     return FarmPackage(
       version: versionValue,
@@ -102,6 +113,11 @@ class FarmPackage {
           .map(FarmPackagePhoto.fromMap)
           .whereType<FarmPackagePhoto>()
           .toList(),
+      // Absent entirely in an old (pre-drawings) package — defaults to an
+      // empty list rather than throwing, so old .salsfarm files keep
+      // importing exactly as before (spec: "Old farms/files without
+      // drawings should simply have zero drawings").
+      drawingMaps: (drawingsRaw is List ? drawingsRaw : const []).whereType<Map<String, dynamic>>().toList(),
     );
   }
 }

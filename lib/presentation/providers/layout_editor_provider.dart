@@ -4,8 +4,10 @@ import 'package:flutter/foundation.dart';
 
 import '../../core/constants/app_constants.dart';
 import '../../core/services/geometry_service.dart';
+import '../../data/models/farm_drawing.dart';
 import '../../data/models/field_boundary.dart';
 import '../../data/models/post.dart';
+import '../../data/repositories/farm_drawing_repository.dart';
 import '../../data/repositories/field_boundary_repository.dart';
 import '../../data/repositories/post_repository.dart';
 
@@ -71,6 +73,7 @@ class DuplicateGroup {
 class LayoutEditorProvider extends ChangeNotifier {
   final PostRepository _postRepo = PostRepository();
   final FieldBoundaryRepository _boundaryRepo = FieldBoundaryRepository();
+  final FarmDrawingRepository _drawingRepo = FarmDrawingRepository();
   static const _geometry = GeometryService();
 
   final String farmId;
@@ -93,6 +96,24 @@ class LayoutEditorProvider extends ChangeNotifier {
   // --- Tree Row placement state ---------------------------------------
   RowPlacementDraft? rowDraft;
   bool get isPlacingRow => rowDraft != null;
+
+  // --- Farm Layout Painter state ---------------------------------------
+  // Purely visual line/rectangle annotations — never trees, never
+  // boundary, never a database relationship to either (spec).
+  List<FarmDrawing> drawings = [];
+  PainterMode painterMode = PainterMode.off;
+
+  // Ids of drawings created THIS editing session, oldest-first — the
+  // "Undo" button in the Painter toolbar only ever pops from here, so it
+  // can never touch a drawing that was already saved from a previous
+  // session, and never touches tree/boundary undo (_undoStack below is a
+  // completely separate stack for that).
+  final List<String> _sessionDrawingIds = [];
+  bool get canUndoDrawing => _sessionDrawingIds.isNotEmpty;
+
+  // While the Eraser tool is active, the drawing under the farmer's last
+  // tap — shown highlighted, purely visual state, never persisted.
+  String? highlightedDrawingId;
 
   // --- Multi-select state ----------------------------------------------
   // The set of individually-selected tree ids the farmer is currently
@@ -131,6 +152,7 @@ class LayoutEditorProvider extends ChangeNotifier {
     notifyListeners();
     _posts = await _postRepo.getPostsForFarm(farmId);
     boundary = await _boundaryRepo.getForFarm(farmId);
+    drawings = await _drawingRepo.getForFarm(farmId);
     _recomputeOutOfBounds();
     _loading = false;
     notifyListeners();
@@ -138,6 +160,57 @@ class LayoutEditorProvider extends ChangeNotifier {
 
   void setTool(EditorTool t) {
     tool = t;
+    notifyListeners();
+  }
+
+  // --- Farm Layout Painter ----------------------------------------------
+  void setPainterMode(PainterMode mode) {
+    painterMode = mode;
+    if (mode != PainterMode.erase) highlightedDrawingId = null;
+    notifyListeners();
+  }
+
+  /// Eraser tool, step one: highlights the tapped drawing (purely visual —
+  /// see [highlightedDrawingId]) before the confirmation dialog the screen
+  /// shows next. Pass null to clear the highlight (e.g. the farmer
+  /// cancels).
+  void highlightDrawing(String? id) {
+    highlightedDrawingId = id;
+    notifyListeners();
+  }
+
+  /// Commits a new line/rectangle. Called once, at the end of a drag on
+  /// the canvas (see FarmCanvas.onDrawComplete) — [start]/[end] are
+  /// already WORLD coordinates by the time they get here.
+  Future<void> addDrawing(DrawingType type, Offset start, Offset end) async {
+    final drawing = await _drawingRepo.create(farmId: farmId, type: type, start: start, end: end);
+    drawings = [...drawings, drawing];
+    _sessionDrawingIds.add(drawing.id);
+    notifyListeners();
+  }
+
+  /// Eraser tool: tapping a drawing highlights it, then deletes it —
+  /// following the same tap-to-confirm-delete pattern the rest of the
+  /// editor already uses for trees (see _handlePostTap's EditorTool.delete
+  /// case in LayoutEditorScreen), so the actual confirmation UI lives with
+  /// the screen, not here.
+  Future<void> deleteDrawing(String id) async {
+    await _drawingRepo.delete(id);
+    drawings = drawings.where((d) => d.id != id).toList();
+    _sessionDrawingIds.remove(id);
+    if (highlightedDrawingId == id) highlightedDrawingId = null;
+    notifyListeners();
+  }
+
+  /// Removes the most recently created drawing from THIS session only —
+  /// never a drawing loaded from a previous session, and never anything
+  /// tree/boundary-related (spec: "It should not undo tree movement, tree
+  /// deletion, boundary editing, or flower counts. Only drawing actions.").
+  Future<void> undoLastDrawing() async {
+    if (_sessionDrawingIds.isEmpty) return;
+    final id = _sessionDrawingIds.removeLast();
+    await _drawingRepo.delete(id);
+    drawings = drawings.where((d) => d.id != id).toList();
     notifyListeners();
   }
 
